@@ -7,6 +7,7 @@ import {
   getOnboarding,
   registerBiometricCredential,
   sendPhoneVerificationCode,
+  verifyFacialIdentity,
   verifyPhoneCode,
   type AuthSession,
   type Onboarding,
@@ -15,6 +16,7 @@ import {
 import { requestGoogleIdToken } from "./googleIdentity";
 
 type Step = "access" | "biometric" | "phone" | "code" | "success" | "home";
+type BiometricAction = "register" | "facial";
 type IconName =
   | "arrow"
   | "back"
@@ -30,7 +32,7 @@ type IconName =
 
 const onboardingSteps = [
   { id: "access", label: "Acceso" },
-  { id: "biometric", label: "Passkey" },
+  { id: "biometric", label: "Biometría" },
   { id: "phone", label: "Celular" },
 ] as const;
 
@@ -150,7 +152,12 @@ function Button({
   type?: "button" | "submit";
 }) {
   return (
-    <button className={`button button-${variant}`} disabled={disabled} onClick={onClick} type={type}>
+    <button
+      className={`button button-${variant}${icon === "google" ? " button-google" : ""}${icon === "face" ? " button-biometric" : ""}`}
+      disabled={disabled}
+      onClick={onClick}
+      type={type}
+    >
       {icon && <Icon name={icon} size={21} />}
       <span>{children}</span>
       {variant === "primary" && !icon && <Icon name="arrow" size={20} />}
@@ -188,11 +195,12 @@ function Header({ onBack, help = true }: { onBack?: () => void; help?: boolean }
 }
 
 function Progress({ current }: { current: number }) {
+  const totalSteps = onboardingSteps.length;
   return (
-    <section className="progress-section" aria-label={`Paso ${Math.min(current + 1, 3)} de 3`}>
+    <section className="progress-section" aria-label={`Paso ${Math.min(current + 1, totalSteps)} de ${totalSteps}`}>
       <div className="progress-heading">
         <span>Configura tu cuenta</span>
-        <span>{Math.min(current + 1, 3)} de 3</span>
+        <span>{Math.min(current + 1, totalSteps)} de {totalSteps}</span>
       </div>
       <div className="progress-track">
         {onboardingSteps.map((item, index) => (
@@ -298,25 +306,39 @@ function BiometricStep({
   onBack,
   busy,
   error,
+  action,
+  localMode,
 }: {
   onRegister: () => void;
   onBack: () => void;
   busy: boolean;
   error: string;
+  action: BiometricAction;
+  localMode: boolean;
 }) {
   return (
     <ScreenShell step="biometric" onBack={onBack}>
       <section className="step-heading">
         <span className="step-icon"><Icon name="face" size={24} /></span>
-        <h1>Registra tu passkey</h1>
-        <p>Confirma tu identidad con el autenticador seguro de este dispositivo para proteger tu cuenta.</p>
+        <h1>Autenticación biométrica</h1>
+        <p>
+          {action === "register"
+            ? "Confirma con el autenticador seguro de este dispositivo para proteger tu cuenta."
+            : "Confirma para continuar. Esta verificación no captura datos biométricos ni valida tu identidad real."}
+        </p>
       </section>
       <div className="action-stack">
         <Button variant="primary" icon="face" onClick={onRegister} disabled={busy}>
-          {busy ? "Esperando al dispositivo..." : "Registrar passkey"}
+          {busy
+            ? action === "register" ? "Esperando al dispositivo..." : "Verificando..."
+            : action === "register" ? "Autenticar con biometría" : "Continuar"}
         </Button>
       </div>
-      <p className="field-hint">Tu dispositivo puede solicitar rostro, huella o su método local de desbloqueo. La biometría no se envía a Minka.</p>
+      <p className="field-hint">
+        {localMode
+          ? "Esta vista local permite avanzar, pero no registra una passkey ni confirma tu identidad."
+          : "Tu dispositivo puede solicitar rostro, huella o su método local de desbloqueo. La biometría no se envía a Minka."}
+      </p>
       {error && <p className="error-message" role="alert"><span>!</span>{error}</p>}
     </ScreenShell>
   );
@@ -554,11 +576,18 @@ export default function App() {
   const [accountName, setAccountName] = useState("");
   const [busy, setBusy] = useState(false);
   const [apiError, setApiError] = useState("");
+  const [localDemo, setLocalDemo] = useState(false);
+  const [biometricAction, setBiometricAction] = useState<BiometricAction>("register");
   const googleClientId = import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined;
 
-  const showNextStep = (onboarding: Onboarding) => {
+  const showNextStep = (onboarding: Onboarding, localMode = localDemo) => {
     switch (onboarding.nextAction) {
       case "REGISTER_BIOMETRIC":
+        setBiometricAction("register");
+        setStep("biometric");
+        break;
+      case "VERIFY_FACIAL_IDENTITY":
+        setBiometricAction("facial");
         setStep("biometric");
         break;
       case "ENTER_PHONE":
@@ -603,13 +632,14 @@ export default function App() {
     };
   }, []);
 
-  const handleAuthentication = async (idToken: string) => {
+  const handleAuthentication = async (idToken: string, useLocalDemo = false) => {
+    setLocalDemo(useLocalDemo);
     setBusy(true);
     setApiError("");
     try {
       const session = await authenticateWithGoogle(idToken, getDeviceId());
       saveSession(session);
-      applySession(session);
+      applySession(session, useLocalDemo);
       track("onboarding_started", { method: googleClientId ? "google" : "local_mock" });
     } catch (error) {
       setApiError(error instanceof Error ? error.message : "No se pudo iniciar sesión.");
@@ -627,7 +657,7 @@ export default function App() {
     setApiError("");
     try {
       const idToken = await requestGoogleIdToken(googleClientId);
-      await handleAuthentication(idToken);
+      await handleAuthentication(idToken, false);
     } catch (error) {
       setApiError(error instanceof Error ? error.message : "No se pudo iniciar sesión con Google.");
       setBusy(false);
@@ -635,6 +665,11 @@ export default function App() {
   };
 
   const handleRegisterPasskey = async () => {
+    if (localDemo) {
+      setApiError("");
+      setStep("phone");
+      return;
+    }
     setBusy(true);
     setApiError("");
     try {
@@ -646,7 +681,19 @@ export default function App() {
         credential,
       );
       track("onboarding_step_completed", { step: "passkey_registered" });
-      showNextStep(result.onboarding);
+      if (result.onboarding.nextAction === "VERIFY_FACIAL_IDENTITY") {
+        const facialResult = await verifyFacialIdentity(accessToken);
+        track("onboarding_step_completed", {
+          step: "facial_verification",
+          result: facialResult.result,
+        });
+        if (facialResult.result === "NOT_APPROVED") {
+          setApiError("La verificación no fue aprobada. Puedes volver a intentarlo.");
+        }
+        showNextStep(facialResult.onboarding);
+      } else {
+        showNextStep(result.onboarding);
+      }
     } catch (error) {
       handleSessionError(error);
     } finally {
@@ -701,10 +748,10 @@ export default function App() {
     }
   };
 
-  const applySession = (session: AuthSession) => {
+  const applySession = (session: AuthSession, localMode = false) => {
     setAccessToken(session.accessToken);
     setAccountName(session.user.name ?? "");
-    showNextStep(session.onboarding);
+    showNextStep(session.onboarding, localMode);
   };
 
   const handleSessionError = (error: unknown) => {
@@ -721,7 +768,7 @@ export default function App() {
       {step === "access" && (
         <Intro
           onGoogleLogin={handleGoogleLogin}
-          onLocalLogin={() => void handleAuthentication("mock-google-token-local-demo")}
+          onLocalLogin={() => void handleAuthentication("mock-google-token-local-demo", true)}
           googleConfigured={Boolean(googleClientId)}
           busy={busy}
           error={apiError}
@@ -733,6 +780,8 @@ export default function App() {
           onRegister={handleRegisterPasskey}
           busy={busy}
           error={apiError}
+          action={biometricAction}
+          localMode={localDemo}
         />
       )}
       {step === "phone" && (

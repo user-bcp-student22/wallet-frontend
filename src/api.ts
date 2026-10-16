@@ -1,13 +1,24 @@
 export type OnboardingAction =
   | "REGISTER_BIOMETRIC"
+  | "VERIFY_FACIAL_IDENTITY"
   | "ENTER_PHONE"
   | "VERIFY_PHONE"
   | "OPEN_HOME";
 
 export interface Onboarding {
-  status: "BIOMETRIC_PENDING" | "PHONE_PENDING" | "PHONE_VERIFICATION_PENDING" | "COMPLETED";
+  status:
+    | "BIOMETRIC_PENDING"
+    | "FACIAL_VERIFICATION_PENDING"
+    | "PHONE_PENDING"
+    | "PHONE_VERIFICATION_PENDING"
+    | "COMPLETED";
   nextAction: OnboardingAction;
   phoneNumberMasked: string | null;
+}
+
+export interface FacialVerificationResponse {
+  result: "APPROVED" | "NOT_APPROVED";
+  onboarding: Onboarding;
 }
 
 export interface AuthSession {
@@ -122,6 +133,13 @@ export function registerBiometricCredential(
     method: "POST",
     accessToken,
     body: { challengeId, credential },
+  });
+}
+
+export function verifyFacialIdentity(accessToken: string) {
+  return request<FacialVerificationResponse>("/v1/onboarding/facial-verifications", {
+    method: "POST",
+    accessToken,
   });
 }
 

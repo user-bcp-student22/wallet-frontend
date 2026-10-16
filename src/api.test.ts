@@ -6,6 +6,7 @@ import {
   getOnboarding,
   registerBiometricCredential,
   sendPhoneVerificationCode,
+  verifyFacialIdentity,
   verifyPhoneCode,
 } from "./api.ts";
 
@@ -71,6 +72,11 @@ test("all authenticated onboarding operations use their OpenAPI paths and bearer
     nextAction: "ENTER_PHONE" as const,
     phoneNumberMasked: null,
   };
+  const facialPending = {
+    status: "FACIAL_VERIFICATION_PENDING" as const,
+    nextAction: "VERIFY_FACIAL_IDENTITY" as const,
+    phoneNumberMasked: null,
+  };
   const challenge = {
     challengeId: "phone-challenge-1",
     phoneNumberMasked: "+51 999 *** 999",
@@ -102,6 +108,11 @@ test("all authenticated onboarding operations use their OpenAPI paths and bearer
       },
     },
     {
+      path: "/api/v1/onboarding/facial-verifications",
+      run: () => verifyFacialIdentity(token),
+      method: "POST",
+    },
+    {
       path: "/api/v1/onboarding",
       run: () => getOnboarding(token),
       method: "GET",
@@ -121,7 +132,13 @@ test("all authenticated onboarding operations use their OpenAPI paths and bearer
   ];
 
   for (const { path, run, method, body } of cases) {
-    const responseBody = path.includes("/phone/challenges") ? challenge : onboarding;
+    const responseBody = path.includes("/phone/challenges")
+      ? challenge
+      : path.includes("/facial-verifications")
+        ? { result: "APPROVED", onboarding }
+        : path.includes("/biometric/registrations")
+          ? { registered: true, onboarding: facialPending }
+          : onboarding;
     const { request } = await captureRequest(responseBody, path.includes("/phone/challenges") ? 201 : 200, run);
     assert.equal(request.url, path);
     assert.equal(request.init.method, method);

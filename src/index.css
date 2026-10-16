@@ -18,20 +18,23 @@
 }
 
 * { box-sizing: border-box; }
-body { margin: 0; min-width: 320px; min-height: 100vh; }
+html, body, #root { width: 100%; min-height: 100%; }
+body { margin: 0; min-width: 320px; min-height: 100vh; min-height: 100dvh; overflow-x: hidden; }
 button, input { font: inherit; }
 button { cursor: pointer; }
 button:focus-visible, input:focus-visible { outline: 3px solid #bcb0f8; outline-offset: 2px; }
 
-.page-frame { min-height: 100vh; display: flex; justify-content: center; }
+.page-frame { width: 100%; min-height: 100vh; min-height: 100dvh; display: flex; justify-content: center; }
 .app-shell {
   width: 100%;
   min-height: 100vh;
+  min-height: 100dvh;
   background: var(--surface);
   position: relative;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .topbar, .home-header {
@@ -87,11 +90,17 @@ h1, h2, p { margin-top: 0; }
 .button-primary:hover { background: var(--purple-dark); }
 .button-primary svg:last-child { margin-left: auto; }
 .button-primary span:first-of-type { margin-left: auto; }
+.button-primary.button-google { position: relative; }
+.button-primary.button-google > svg { position: absolute; left: 16px; margin: 0; }
+.button-primary.button-google > span:first-of-type { margin: 0; text-align: center; }
+.button-primary.button-biometric { position: relative; }
+.button-primary.button-biometric > svg { position: absolute; left: 16px; margin: 0; }
+.button-primary.button-biometric > span:first-of-type { margin: 0; text-align: center; }
 .button-secondary { color: var(--ink); background: white; border: 1px solid var(--line); }
 .button-secondary:hover { background: #faf9fc; }
 .legal-copy { color: #8a8694; font-size: 9px; text-align: center; line-height: 1.5; margin: 12px 0 0; }
 .legal-copy button { border: 0; padding: 0; color: var(--purple-dark); background: transparent; text-decoration: underline; font-weight: 700; }
-.trust-footer { min-height: 34px; padding: 0 24px 14px; display: flex; justify-content: center; align-items: center; gap: 5px; font-size: 9px; color: #8b8795; }
+.trust-footer { min-height: 34px; padding: 0 24px calc(14px + env(safe-area-inset-bottom)); display: flex; justify-content: center; align-items: center; gap: 5px; font-size: 9px; color: #8b8795; }
 
 .step-heading { text-align: center; }
 .step-heading.compact { margin-top: -6px; }
@@ -168,20 +177,62 @@ h1, h2, p { margin-top: 0; }
 .quick-actions strong { font-size: 12px; }
 .quick-actions small { color: var(--muted); font-size: 9px; margin-top: 2px; }
 .quick-actions button:nth-child(2) svg { transform: rotate(-45deg); }
-.empty-activity { flex: 1; padding: 3px 24px 85px; text-align: center; }
+.empty-activity { flex: 1; padding: 3px 24px calc(85px + env(safe-area-inset-bottom)); text-align: center; }
 .section-title { display: flex; align-items: center; justify-content: space-between; text-align: left; }
 .section-title h2 { font-size: 14px; margin: 0; }
 .section-title button { border: 0; background: transparent; color: var(--purple); font-size: 10px; font-weight: 800; }
 .empty-icon { width: 48px; height: 48px; border-radius: 15px; display: grid; place-items: center; color: #aaa5b4; background: #eeecf1; margin: 27px auto 9px; }
 .empty-activity > strong { font-size: 11px; }
 .empty-activity > p { color: var(--muted); font-size: 9px; margin: 4px 0; }
-.bottom-nav { position: absolute; bottom: 0; left: 0; right: 0; height: 68px; display: grid; grid-template-columns: repeat(3, 1fr); background: rgba(255,255,255,.96); border-top: 1px solid var(--line); }
+.bottom-nav { position: absolute; bottom: 0; left: 0; right: 0; height: calc(68px + env(safe-area-inset-bottom)); padding-bottom: env(safe-area-inset-bottom); display: grid; grid-template-columns: repeat(3, 1fr); background: rgba(255,255,255,.96); border-top: 1px solid var(--line); }
 .bottom-nav button { border: 0; background: transparent; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; color: #9792a0; font-size: 8px; font-weight: 700; }
 .bottom-nav button.is-active { color: var(--purple); }
 
 @media (min-width: 620px) {
-  .page-frame { padding: 28px; align-items: center; }
-  .app-shell { width: 430px; min-height: min(820px, calc(100vh - 56px)); height: min(820px, calc(100vh - 56px)); border-radius: 28px; box-shadow: 0 24px 70px rgba(28, 23, 53, .15); }
+  .page-frame { padding: 24px; align-items: center; }
+  .app-shell { width: min(430px, 100%); min-height: min(820px, calc(100dvh - 48px)); height: min(820px, calc(100dvh - 48px)); border-radius: 28px; box-shadow: 0 24px 70px rgba(28, 23, 53, .15); }
+}
+
+@media (max-width: 380px) {
+  .topbar { padding-inline: 16px; }
+  .progress-section { padding-inline: 18px; }
+  .content { padding: 16px 18px 12px; }
+  .progress-heading { font-size: 10px; }
+  .progress-label { font-size: 9px; }
+  .hero-copy h1 { font-size: 27px; }
+  .wallet-visual { height: 190px; }
+  .orbit-one { width: min(280px, calc(100vw - 40px)); }
+  .orbit-two { width: min(226px, calc(100vw - 80px)); }
+  .country-prefix { padding-inline: 10px; gap: 6px; }
+  .code-grid { gap: 6px; }
+  .code-grid input { height: 50px; font-size: 18px; }
+  .success-action { padding-inline: 18px; }
+  .welcome-row, .balance-card, .quick-actions, .empty-activity { margin-inline: 0; }
+  .welcome-row { padding-inline: 18px; gap: 8px; }
+  .welcome-row h1 { font-size: 20px; }
+  .active-badge { font-size: 9px; padding: 5px 7px; }
+  .balance-card { margin-inline: 18px; }
+  .quick-actions { padding-inline: 18px; }
+  .empty-activity { padding-inline: 18px; }
+}
+
+@media (max-width: 340px) {
+  .help-button { padding-inline: 4px; }
+  .hero-copy h1 { font-size: 25px; }
+  .wallet-card { width: 198px; }
+  .code-grid { gap: 5px; }
+  .code-grid input { height: 46px; border-radius: 10px; font-size: 17px; }
+  .quick-actions { gap: 8px; }
+  .quick-actions button { padding: 12px; }
+  .quick-actions small { font-size: 8px; }
+}
+
+@media (max-height: 620px) {
+  .page-frame { align-items: flex-start; }
+  .app-shell { min-height: 100vh; min-height: 100dvh; height: auto; }
+  .content { flex: 0 0 auto; }
+  .wallet-visual { height: 150px; }
+  .form-spacer { min-height: 18px; }
 }
 
 @media (max-height: 700px) {
