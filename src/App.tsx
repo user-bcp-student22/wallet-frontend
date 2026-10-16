@@ -1,6 +1,20 @@
 import { useEffect, useRef, useState } from "react";
+import {
+  ApiError,
+  authenticateWithGoogle,
+  createBiometricRegistrationChallenge,
+  createPasskey,
+  getOnboarding,
+  registerBiometricCredential,
+  sendPhoneVerificationCode,
+  verifyPhoneCode,
+  type AuthSession,
+  type Onboarding,
+  type PhoneChallenge,
+} from "./api";
+import { requestGoogleIdToken } from "./googleIdentity";
 
-type Step = "access" | "phone" | "code" | "pin" | "success" | "home";
+type Step = "access" | "biometric" | "phone" | "code" | "success" | "home";
 type IconName =
   | "arrow"
   | "back"
@@ -16,15 +30,15 @@ type IconName =
 
 const onboardingSteps = [
   { id: "access", label: "Acceso" },
+  { id: "biometric", label: "Passkey" },
   { id: "phone", label: "Celular" },
-  { id: "pin", label: "PIN" },
 ] as const;
 
 const stepNumber: Record<Step, number> = {
   access: 0,
-  phone: 1,
-  code: 1,
-  pin: 2,
+  biometric: 1,
+  phone: 2,
+  code: 2,
   success: 3,
   home: 3,
 };
@@ -217,17 +231,19 @@ function ScreenShell({
   );
 }
 
-function Intro({ onContinue }: { onContinue: () => void }) {
-  const [scanning, setScanning] = useState(false);
-
-  const biometric = () => {
-    setScanning(true);
-    window.setTimeout(() => {
-      track("onboarding_started", { method: "face_id" });
-      onContinue();
-    }, 900);
-  };
-
+function Intro({
+  onGoogleLogin,
+  onLocalLogin,
+  googleConfigured,
+  busy,
+  error,
+}: {
+  onGoogleLogin: () => void;
+  onLocalLogin: () => void;
+  googleConfigured: boolean;
+  busy: boolean;
+  error: string;
+}) {
   return (
     <ScreenShell step="access">
       <section className="hero-copy">
@@ -250,19 +266,26 @@ function Intro({ onContinue }: { onContinue: () => void }) {
 
       <section className="action-stack">
         <Button
-          variant="secondary"
+          variant="primary"
           icon="google"
-          onClick={() => {
-            track("onboarding_started", { method: "google" });
-            onContinue();
-          }}
+          onClick={onGoogleLogin}
+          disabled={!googleConfigured || busy}
         >
-          Continuar con Google
+          {busy ? "Conectando..." : "Continuar con Google"}
         </Button>
-        <Button variant="primary" icon="face" onClick={biometric} disabled={scanning}>
-          {scanning ? "Verificando rostro..." : "Ingresar con reconocimiento facial"}
-        </Button>
+        {import.meta.env.DEV && (
+          <Button variant="secondary" onClick={onLocalLogin} disabled={busy}>
+            Probar con backend local
+          </Button>
+        )}
       </section>
+      {!googleConfigured && !import.meta.env.DEV && (
+        <p className="field-hint">El inicio con Google no está configurado para este entorno.</p>
+      )}
+      {import.meta.env.DEV && !googleConfigured && (
+        <p className="field-hint">Modo de desarrollo: el botón de prueba usa el proveedor mock del backend.</p>
+      )}
+      {error && <p className="error-message" role="alert"><span>!</span>{error}</p>}
       <p className="legal-copy">
         Al continuar, aceptas nuestros <button>Términos</button> y <button>Política de privacidad</button>.
       </p>
@@ -270,7 +293,46 @@ function Intro({ onContinue }: { onContinue: () => void }) {
   );
 }
 
-function PhoneStep({ onNext, onBack }: { onNext: (phone: string) => void; onBack: () => void }) {
+function BiometricStep({
+  onRegister,
+  onBack,
+  busy,
+  error,
+}: {
+  onRegister: () => void;
+  onBack: () => void;
+  busy: boolean;
+  error: string;
+}) {
+  return (
+    <ScreenShell step="biometric" onBack={onBack}>
+      <section className="step-heading">
+        <span className="step-icon"><Icon name="face" size={24} /></span>
+        <h1>Registra tu passkey</h1>
+        <p>Confirma tu identidad con el autenticador seguro de este dispositivo para proteger tu cuenta.</p>
+      </section>
+      <div className="action-stack">
+        <Button variant="primary" icon="face" onClick={onRegister} disabled={busy}>
+          {busy ? "Esperando al dispositivo..." : "Registrar passkey"}
+        </Button>
+      </div>
+      <p className="field-hint">Tu dispositivo puede solicitar rostro, huella o su método local de desbloqueo. La biometría no se envía a Minka.</p>
+      {error && <p className="error-message" role="alert"><span>!</span>{error}</p>}
+    </ScreenShell>
+  );
+}
+
+function PhoneStep({
+  onNext,
+  onBack,
+  busy,
+  error: apiError,
+}: {
+  onNext: (phone: string) => void;
+  onBack: () => void;
+  busy: boolean;
+  error: string;
+}) {
   const [phone, setPhone] = useState("");
   const [error, setError] = useState("");
 
@@ -280,7 +342,6 @@ function PhoneStep({ onNext, onBack }: { onNext: (phone: string) => void; onBack
       setError("Ingresa un celular válido de 9 dígitos que empiece con 9.");
       return;
     }
-    track("onboarding_step_completed", { step: "phone_entered" });
     onNext(phone);
   };
 
@@ -321,18 +382,40 @@ function PhoneStep({ onNext, onBack }: { onNext: (phone: string) => void; onBack
         ) : (
           <p className="field-hint" id="phone-hint">Usaremos este número para proteger tu cuenta.</p>
         )}
+        {apiError && <p className="error-message" role="alert"><span>!</span>{apiError}</p>}
         <div className="form-spacer" />
-        <Button type="submit">Enviar código</Button>
+        <Button type="submit" disabled={busy}>{busy ? "Enviando..." : "Enviar código"}</Button>
       </form>
     </ScreenShell>
   );
 }
 
-function CodeStep({ phone, onNext, onBack }: { phone: string; onNext: () => void; onBack: () => void }) {
+function CodeStep({
+  challenge,
+  onNext,
+  onResend,
+  onBack,
+  busy,
+  error: apiError,
+}: {
+  challenge: PhoneChallenge;
+  onNext: (code: string) => void;
+  onResend: () => void;
+  onBack: () => void;
+  busy: boolean;
+  error: string;
+}) {
   const [digits, setDigits] = useState(["", "", "", "", "", ""]);
   const [error, setError] = useState("");
-  const [seconds, setSeconds] = useState(38);
+  const [seconds, setSeconds] = useState(() =>
+    Math.max(0, Math.ceil((new Date(challenge.resendAvailableAt).getTime() - Date.now()) / 1000)),
+  );
   const inputs = useRef<Array<HTMLInputElement | null>>([]);
+
+  useEffect(() => {
+    setSeconds(Math.max(0, Math.ceil((new Date(challenge.resendAvailableAt).getTime() - Date.now()) / 1000)));
+    setDigits(["", "", "", "", "", ""]);
+  }, [challenge]);
 
   useEffect(() => {
     if (seconds <= 0) return;
@@ -356,22 +439,15 @@ function CodeStep({ phone, onNext, onBack }: { phone: string; onNext: () => void
       setError("Completa los 6 dígitos del código que recibiste.");
       return;
     }
-    if (code !== "482913") {
-      setError("Ese código no coincide. Revísalo o solicita uno nuevo.");
-      return;
-    }
-    track("onboarding_step_completed", { step: "phone_verified" });
-    onNext();
+    onNext(code);
   };
-
-  const masked = `${phone.slice(0, 3)} *** ${phone.slice(-3)}`;
 
   return (
     <ScreenShell step="code" onBack={onBack}>
       <section className="step-heading">
         <span className="step-icon message-icon"><Icon name="shield" size={24} /></span>
         <h1>Revisa tus mensajes</h1>
-        <p>Ingresa el código de 6 dígitos que enviamos al <strong>+51 {masked}</strong>.</p>
+        <p>Ingresa el código de 6 dígitos que enviamos al <strong>{challenge.phoneNumberMasked}</strong>.</p>
       </section>
       <form className="step-form" onSubmit={verify}>
         <label htmlFor="digit-0">Código de verificación</label>
@@ -394,85 +470,23 @@ function CodeStep({ phone, onNext, onBack }: { phone: string; onNext: () => void
           ))}
         </div>
         {error && <p className="error-message" role="alert"><span>!</span>{error}</p>}
+        {apiError && <p className="error-message" role="alert"><span>!</span>{apiError}</p>}
         <div className="resend-row">
           <span>¿No recibiste el código?</span>
           {seconds > 0 ? (
             <strong>Reenviar en 0:{String(seconds).padStart(2, "0")}</strong>
           ) : (
-            <button type="button" onClick={() => { setSeconds(38); setError(""); }}>Reenviar código</button>
+            <button type="button" onClick={onResend} disabled={busy}>Reenviar código</button>
           )}
         </div>
-        <p className="demo-note">Para esta demo, usa el código <strong>482913</strong></p>
         <div className="form-spacer" />
-        <Button type="submit">Verificar celular</Button>
+        <Button type="submit" disabled={busy}>{busy ? "Verificando..." : "Verificar celular"}</Button>
       </form>
     </ScreenShell>
   );
 }
 
-function PinStep({ onNext, onBack }: { onNext: () => void; onBack: () => void }) {
-  const [pin, setPin] = useState("");
-  const [confirming, setConfirming] = useState(false);
-  const [firstPin, setFirstPin] = useState("");
-  const [error, setError] = useState("");
-
-  const add = (digit: string) => {
-    if (pin.length < 6) {
-      setPin(`${pin}${digit}`);
-      setError("");
-    }
-  };
-
-  const proceed = () => {
-    if (pin.length !== 6) {
-      setError("Tu PIN debe tener exactamente 6 dígitos.");
-      return;
-    }
-    if (/^(\d)\1{5}$/.test(pin) || pin === "123456" || pin === "654321") {
-      setError("Elige un PIN menos predecible. Evita secuencias o números repetidos.");
-      return;
-    }
-    if (!confirming) {
-      setFirstPin(pin);
-      setPin("");
-      setConfirming(true);
-      return;
-    }
-    if (pin !== firstPin) {
-      setError("Los PIN no coinciden. Vuelve a intentarlo.");
-      setPin("");
-      return;
-    }
-    track("onboarding_step_completed", { step: "pin_created" });
-    track("onboarding_completed", { status: "wallet_active", durationTargetSeconds: 180 });
-    onNext();
-  };
-
-  return (
-    <ScreenShell step="pin" onBack={onBack}>
-      <section className="step-heading compact">
-        <span className="step-icon"><Icon name="lock" size={24} /></span>
-        <h1>{confirming ? "Confirma tu PIN" : "Crea tu PIN"}</h1>
-        <p>{confirming ? "Ingresa nuevamente los 6 dígitos." : "Lo usarás para autorizar tus pagos de forma segura."}</p>
-      </section>
-      <div className="pin-dots" aria-label={`${pin.length} de 6 dígitos ingresados`}>
-        {Array.from({ length: 6 }).map((_, index) => <span key={index} className={index < pin.length ? "is-filled" : ""} />)}
-      </div>
-      {error && <p className="error-message pin-error" role="alert"><span>!</span>{error}</p>}
-      <div className="number-pad" role="group" aria-label="Teclado numérico">
-        {["1", "2", "3", "4", "5", "6", "7", "8", "9"].map((number) => (
-          <button key={number} onClick={() => add(number)}>{number}</button>
-        ))}
-        <span />
-        <button onClick={() => add("0")}>0</button>
-        <button className="delete-key" onClick={() => setPin(pin.slice(0, -1))} aria-label="Borrar dígito">⌫</button>
-      </div>
-      <Button onClick={proceed}>{confirming ? "Activar mi wallet" : "Continuar"}</Button>
-    </ScreenShell>
-  );
-}
-
-function Success({ onNext }: { onNext: () => void }) {
+function Success({ onNext, name }: { onNext: () => void; name: string }) {
   useEffect(() => {
     track("onboarding_flow_closed", { outcome: "success" });
   }, []);
@@ -484,14 +498,9 @@ function Success({ onNext }: { onNext: () => void }) {
         <div className="success-badge">
           <span><Icon name="check" size={42} /></span>
         </div>
-        <span className="status-pill"><i /> Wallet activa</span>
-        <h1>¡Todo listo, Valeria!</h1>
-        <p>Tu wallet ya está activa. Puedes empezar a pagar y transferir al instante.</p>
-        <div className="limit-card">
-          <span className="limit-icon"><Icon name="shield" size={22} /></span>
-          <div><span>Tu límite diario</span><strong>S/ 1,500.00</strong></div>
-          <button aria-label="Más información"><Icon name="help" size={18} /></button>
-        </div>
+        <span className="status-pill"><i /> Registro completado</span>
+        <h1>¡Todo listo{name ? `, ${name}` : ""}!</h1>
+        <p>Tu identidad y celular fueron verificados correctamente.</p>
       </section>
       <div className="success-action">
         <Button onClick={onNext}>Ir a mi wallet</Button>
@@ -501,17 +510,18 @@ function Success({ onNext }: { onNext: () => void }) {
   );
 }
 
-function Home() {
+function Home({ name }: { name: string }) {
   return (
     <main className="app-shell home-screen">
       <header className="home-header">
         <Brand />
-        <button className="avatar" aria-label="Abrir perfil">VR</button>
+        <button className="avatar" aria-label="Abrir perfil">{name.slice(0, 1).toUpperCase() || "M"}</button>
       </header>
       <section className="welcome-row">
-        <div><span>Buenas tardes,</span><h1>Valeria</h1></div>
-        <span className="active-badge"><i /> Activa</span>
+        <div><span>Bienvenido/a,</span><h1>{name || "a Minka"}</h1></div>
+        <span className="active-badge"><i /> Registro completo</span>
       </section>
+      <p className="field-hint">Vista de demostración: el contrato actual no expone saldo ni movimientos.</p>
       <section className="balance-card">
         <div className="balance-top"><span>Saldo disponible</span><Icon name="shield" size={18} /></div>
         <strong>S/ 0.00</strong>
@@ -539,15 +549,224 @@ function Home() {
 export default function App() {
   const [step, setStep] = useState<Step>("access");
   const [phone, setPhone] = useState("");
+  const [challenge, setChallenge] = useState<PhoneChallenge | null>(null);
+  const [accessToken, setAccessToken] = useState(() => sessionStorage.getItem("minka_access_token") ?? "");
+  const [accountName, setAccountName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [apiError, setApiError] = useState("");
+  const googleClientId = import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined;
+
+  const showNextStep = (onboarding: Onboarding) => {
+    switch (onboarding.nextAction) {
+      case "REGISTER_BIOMETRIC":
+        setStep("biometric");
+        break;
+      case "ENTER_PHONE":
+        setStep("phone");
+        break;
+      case "VERIFY_PHONE":
+        setStep("phone");
+        break;
+      case "OPEN_HOME":
+        if (onboarding.status !== "COMPLETED") {
+          setApiError("La API indicó OPEN_HOME sin completar el registro.");
+          setStep("access");
+          return;
+        }
+        track("onboarding_completed", { status: onboarding.status });
+        setStep("success");
+        break;
+    }
+  };
+
+  useEffect(() => {
+    if (!accessToken) return;
+    let active = true;
+    setBusy(true);
+    getOnboarding(accessToken)
+      .then((onboarding) => {
+        if (active) showNextStep(onboarding);
+      })
+      .catch((error: unknown) => {
+        if (!active) return;
+        if (error instanceof ApiError && error.status === 401) {
+          sessionStorage.removeItem("minka_access_token");
+          setAccessToken("");
+        }
+        setApiError(error instanceof Error ? error.message : "No se pudo restaurar la sesión.");
+      })
+      .finally(() => {
+        if (active) setBusy(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const handleAuthentication = async (idToken: string) => {
+    setBusy(true);
+    setApiError("");
+    try {
+      const session = await authenticateWithGoogle(idToken, getDeviceId());
+      saveSession(session);
+      applySession(session);
+      track("onboarding_started", { method: googleClientId ? "google" : "local_mock" });
+    } catch (error) {
+      setApiError(error instanceof Error ? error.message : "No se pudo iniciar sesión.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleGoogleLogin = async () => {
+    if (!googleClientId) {
+      setApiError("Configura VITE_GOOGLE_CLIENT_ID para usar el inicio real con Google.");
+      return;
+    }
+    setBusy(true);
+    setApiError("");
+    try {
+      const idToken = await requestGoogleIdToken(googleClientId);
+      await handleAuthentication(idToken);
+    } catch (error) {
+      setApiError(error instanceof Error ? error.message : "No se pudo iniciar sesión con Google.");
+      setBusy(false);
+    }
+  };
+
+  const handleRegisterPasskey = async () => {
+    setBusy(true);
+    setApiError("");
+    try {
+      const biometricChallenge = await createBiometricRegistrationChallenge(accessToken);
+      const credential = await createPasskey(biometricChallenge.publicKey);
+      const result = await registerBiometricCredential(
+        accessToken,
+        biometricChallenge.challengeId,
+        credential,
+      );
+      track("onboarding_step_completed", { step: "passkey_registered" });
+      showNextStep(result.onboarding);
+    } catch (error) {
+      handleSessionError(error);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleSendCode = async (value: string) => {
+    setBusy(true);
+    setApiError("");
+    try {
+      const phoneChallenge = await sendPhoneVerificationCode(accessToken, `+51${value}`);
+      setPhone(value);
+      setChallenge(phoneChallenge);
+      setStep("code");
+      track("onboarding_step_completed", { step: "phone_entered" });
+    } catch (error) {
+      handleSessionError(error);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleResendCode = async () => {
+    setBusy(true);
+    setApiError("");
+    try {
+      setChallenge(await sendPhoneVerificationCode(accessToken, `+51${phone}`));
+    } catch (error) {
+      handleSessionError(error);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleVerifyCode = async (code: string) => {
+    if (!challenge) {
+      setApiError("No hay un desafío SMS activo. Solicita un código nuevo.");
+      setStep("phone");
+      return;
+    }
+    setBusy(true);
+    setApiError("");
+    try {
+      const onboarding = await verifyPhoneCode(accessToken, challenge.challengeId, code);
+      track("onboarding_step_completed", { step: "phone_verified" });
+      showNextStep(onboarding);
+    } catch (error) {
+      handleSessionError(error);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const applySession = (session: AuthSession) => {
+    setAccessToken(session.accessToken);
+    setAccountName(session.user.name ?? "");
+    showNextStep(session.onboarding);
+  };
+
+  const handleSessionError = (error: unknown) => {
+    if (error && typeof error === "object" && "status" in error && error.status === 401) {
+      sessionStorage.removeItem("minka_access_token");
+      setAccessToken("");
+      setStep("access");
+    }
+    setApiError(error instanceof Error ? error.message : "La solicitud a la API falló.");
+  };
 
   return (
     <div className="page-frame">
-      {step === "access" && <Intro onContinue={() => setStep("phone")} />}
-      {step === "phone" && <PhoneStep onBack={() => setStep("access")} onNext={(value) => { setPhone(value); setStep("code"); }} />}
-      {step === "code" && <CodeStep phone={phone} onBack={() => setStep("phone")} onNext={() => setStep("pin")} />}
-      {step === "pin" && <PinStep onBack={() => setStep("code")} onNext={() => setStep("success")} />}
-      {step === "success" && <Success onNext={() => setStep("home")} />}
-      {step === "home" && <Home />}
+      {step === "access" && (
+        <Intro
+          onGoogleLogin={handleGoogleLogin}
+          onLocalLogin={() => void handleAuthentication("mock-google-token-local-demo")}
+          googleConfigured={Boolean(googleClientId)}
+          busy={busy}
+          error={apiError}
+        />
+      )}
+      {step === "biometric" && (
+        <BiometricStep
+          onBack={() => setStep("access")}
+          onRegister={handleRegisterPasskey}
+          busy={busy}
+          error={apiError}
+        />
+      )}
+      {step === "phone" && (
+        <PhoneStep
+          onBack={() => setStep("access")}
+          onNext={(value) => void handleSendCode(value)}
+          busy={busy}
+          error={apiError}
+        />
+      )}
+      {step === "code" && challenge && (
+        <CodeStep
+          challenge={challenge}
+          onBack={() => setStep("phone")}
+          onNext={(code) => void handleVerifyCode(code)}
+          onResend={() => void handleResendCode()}
+          busy={busy}
+          error={apiError}
+        />
+      )}
+      {step === "success" && <Success name={accountName} onNext={() => setStep("home")} />}
+      {step === "home" && <Home name={accountName} />}
     </div>
   );
+}
+
+function getDeviceId(): string {
+  const existing = localStorage.getItem("minka_device_id");
+  if (existing) return existing;
+  const deviceId = crypto.randomUUID();
+  localStorage.setItem("minka_device_id", deviceId);
+  return deviceId;
+}
+
+function saveSession(session: AuthSession) {
+  sessionStorage.setItem("minka_access_token", session.accessToken);
 }
